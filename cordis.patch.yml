@@ -1,6 +1,0 @@
-# AutoREST DSH plugin — registers the autorest skill bundle
-- insert:
-    - id: autorest
-      name: 'autorest-dsh-plugin'
-      config:
-        skillPath: !!js process.env.AUTOREST_SKILL_PATH ?? './assets/skills/autorest'
