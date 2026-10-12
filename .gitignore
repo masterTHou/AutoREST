@@ -36,3 +36,8 @@ Thumbs.db
 
 # Conda
 .envrc
+
+# Release artifacts (uploaded to GitHub Releases, not committed)
+*.zip
+*.tgz
+autorest-skill-*
