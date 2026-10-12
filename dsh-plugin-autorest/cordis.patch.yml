@@ -1,0 +1,5 @@
+# AutoREST skill bundle. Registers the bundled REST quantum chemistry Skill.
+- insert:
+    - id: autorest
+      name: '@autorest/dsh-plugin-autorest'
+      config: {}
