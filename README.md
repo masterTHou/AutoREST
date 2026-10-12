@@ -154,7 +154,7 @@ AutoREST/
 
 - REST: Z. Li et al., *Chin. J. Chem. Phys.* DOI: 10.1063/1674-0068/cjcp2510156
 - GW-BSE in REST: Q. Gao et al., *J. Chem. Phys.* 164, 214116 (2026)
-- AutoREST: Z. Tong, *AutoREST*, 2026. https://github.com/your-org/AutoREST
+- Ai-DFT https://github.com/SII-chenlz/Ai-DFT
 
 ---
 
