@@ -14,7 +14,7 @@
 
 和 AIFS 一样的安装方式：
 
-1. 从 [Releases](https://github.com/your-org/AutoREST/releases) 下载 `autorest-1.0.0.tgz`
+1. 从 [Releases](https://github.com/masterTHou/AutoREST/releases) 下载 `autorest-1.0.0.tgz`
 2. DSH 桌面版 → 「插件 → 添加插件」→ 填写 `.tgz` 绝对路径
 3. 启用 AutoREST
 4. 在聊天界面直接说：**"帮我算一个水分子的 B3LYP/def2-SVP 单点能"**
