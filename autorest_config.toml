@@ -1,0 +1,48 @@
+# AutoREST Configuration
+# =======================
+# Copy this file to your working directory and modify as needed.
+
+[rest]
+# Conda environment containing REST
+conda_env = "rest"
+
+# Explicit REST executable path (empty = auto-detect from conda env)
+executable = ""
+
+# Default computational resources
+num_threads = 4
+max_memory_mb = 4000
+
+[output]
+# Default output directory
+default_dir = "./calc"
+
+# Save generated input cards
+save_cards = true
+
+# Save complete calculation logs
+save_logs = true
+
+[validation]
+# Check SCF convergence (always recommended)
+check_scf = true
+
+# Check wavefunction stability (may be slow for large systems)
+check_stability = false
+
+# Check for imaginary frequencies after optimization
+check_frequencies = true
+
+# Imaginary frequency tolerance (cm⁻¹)
+# Frequencies above this threshold are considered "real" for validation
+frequency_threshold_cm1 = -50.0
+
+[gwbse]
+# Default GW-BSE settings
+default_functional = "scan"
+default_basis = "cc-pVDZ"
+default_auxbas = "def2-SV(P)-JKFIT"
+default_n_roots = 5
+davidson_max_subspace = 50
+davidson_restart = 10
+use_low_rank_contour = true
