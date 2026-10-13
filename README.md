@@ -3,7 +3,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![REST](https://img.shields.io/badge/REST-v2026-green)](https://gitee.com/restgroup)
 [![DSH Skill](https://img.shields.io/badge/DSH-Skill-blue)](https://www.deepseek.com/)
-[![Version](https://img.shields.io/badge/version-2.2.0-brightgreen)](https://github.com/masterTHou/AutoREST/releases)
+[![Version](https://img.shields.io/badge/version-2.2.1-brightgreen)](https://github.com/masterTHou/AutoREST/releases)
 
 > **在 DeepSeek Harness 里用聊天完成量子化学计算。**
 >
