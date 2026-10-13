@@ -3,7 +3,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![REST](https://img.shields.io/badge/REST-v2026-green)](https://gitee.com/restgroup)
 [![DSH Skill](https://img.shields.io/badge/DSH-Skill-blue)](https://www.deepseek.com/)
-[![Version](https://img.shields.io/badge/version-2.1.0-brightgreen)](https://github.com/masterTHou/AutoREST/releases)
+[![Version](https://img.shields.io/badge/version-2.2.0-brightgreen)](https://github.com/masterTHou/AutoREST/releases)
 
 > **在 DeepSeek Harness 里用聊天完成量子化学计算。**
 >
@@ -111,7 +111,7 @@ DSH 启动时按优先级扫描以下目录：
 
 ### 方式一：下载 Release 压缩包（最简单）
 
-1. 从 [Releases](https://github.com/masterTHou/AutoREST/releases) 下载 `autorest-skill-v2.1.0.zip`
+1. 从 [Releases](https://github.com/masterTHou/AutoREST/releases) 下载 `autorest-dsh-2.2.0.tgz`
 2. 解压到你的 DSH 项目根目录——解压后应该出现 `你的项目/.dsh/skills/autorest/SKILL.md`
 3. **完全退出 DSH 再重新打开**
 4. 在聊天里说：「帮我算一个水分子的单点能」
