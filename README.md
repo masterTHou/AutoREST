@@ -39,6 +39,48 @@
 
 ---
 
+## 🆕 最新更新 (v2.2.1)
+
+### 三种工作模式，灵活适配不同场景
+
+| 模式 | 适合谁 | 怎么用 |
+|------|--------|--------|
+| **标准模式** | 新手 / 不熟悉计算方法的用户 | 一步一步选：任务类型 → 方法推荐 → 确认生成 |
+| **快捷模式** | 老手 / 已明确方法和基组 | 直接说「B3LYP/def2-SVP 算 BDE」，跳过推荐面板 |
+| **批量模式** | 需要一次算多个任务 | 导入 xlsx/CSV 文件，统一选方法和资源，一键批量生成 |
+
+### 更智能的方法推荐
+
+不再一刀切推荐 B3LYP——根据你任务中的**关键词**动态匹配：
+
+- 说 **"高精度"** → 自动推荐 XYG3/def2-QZVPP
+- 说 **"过渡金属"** → 自动推荐 PBE0-D3BJ/def2-TZVP
+- 说 **"弱相互作用"** → 自动推荐 M06-2X + 色散校正
+- 说 **"BDE"** → 提醒需要分子+碎片两个单点能后相减
+- 共 **13 种关键词**覆盖常见计算场景
+
+### REST 任务语法速查
+
+内置了每种任务类型的 REST 配置语法 + 支持程度标注（✅ 完全支持 / ⚠️ 实验性），包括过渡态搜索、IRC、势能面扫描的已知限制。
+
+### SCF 收敛故障速查
+
+遇到 SCF 不收敛？内置 6 种常见症状的**一键诊断**：能量振荡 → `ediis+diis`；近简并 → `level_shift`；收敛慢 → `smear`；过渡金属 → 组合策略。
+
+### 使用方法
+
+在 DSH 聊天框里说：
+
+> 帮我算一个水分子的单点能
+
+AutoREST 会弹出一个工作模式选择面板，选「标准模式」进入逐步引导；或者直接说「B3LYP/def2-SVP 算水分子能量」进入快捷模式。
+
+如果你有多个任务（比如 xlsx 表格里列了 9 个体系），选「批量模式」，上传文件后统一配置即可。
+
+> 💡 **REST 运行命令**：生成 `.in` 文件后执行 `conda activate rest && rest -i 文件名.in > 文件名.out`
+
+---
+
 ## 它能做什么
 
 | 你说的 | AutoREST 自动生成的 |
@@ -111,7 +153,7 @@ DSH 启动时按优先级扫描以下目录：
 
 ### 方式一：下载 Release 压缩包（最简单）
 
-1. 从 [Releases](https://github.com/masterTHou/AutoREST/releases) 下载 `autorest-dsh-2.2.0.tgz`
+1. 从 [Releases](https://github.com/masterTHou/AutoREST/releases) 下载 `autorest-dsh-2.2.1.tgz`
 2. 解压到你的 DSH 项目根目录——解压后应该出现 `你的项目/.dsh/skills/autorest/SKILL.md`
 3. **完全退出 DSH 再重新打开**
 4. 在聊天里说：「帮我算一个水分子的单点能」
@@ -341,8 +383,8 @@ python -m unittest discover -s tests -v
 ### 打包 Release
 
 ```powershell
-.\release.ps1 -Version "2.1.1"
-# 生成 autorest-skill-v2.1.1.zip
+.\release.ps1 -Version "2.2.1"
+# 生成 autorest-dsh-2.2.1.tgz
 ```
 
 ### 修改 Skill 指令
