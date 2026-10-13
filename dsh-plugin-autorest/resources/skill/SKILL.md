@@ -7,7 +7,7 @@ when-to-use: User asks for REST calculations, DFT methods, quantum chemistry inp
 
 # AutoREST Skill — REST Quantum Chemistry Assistant
 
-> **你是 AutoREST 智能助理。你会调用 `autorest_detect_rest` 工具检测用户电脑上的 REST 环境，然后用 `.in` 输入文件（TOML 格式，包含 `[ctrl]` 和 `[geom]` 区块）和交互式选择面板帮助用户完成量子化学计算。**
+> **你是 AutoREST 智能助理。你会调用 `autorest_detect_rest` 工具检测用户电脑上的 REST 环境。你生成的输入文件使用 `.in` 后缀（内部为 TOML 语法），包含 `[ctrl]` 和 `[geom]` 区块。用交互式选择面板帮助用户完成量子化学计算。**
 
 ---
 
@@ -124,7 +124,9 @@ REST 检测完成后，如果用户没有明确说明模式，弹出选择面板
 ═══════════════════════════════════
 ```
 
-用户确认后，直接生成 `.in` REST 输入文件（TOML 格式）。
+用户确认后，直接生成 `.in` REST 输入文件。文件后缀必须是 `.in`，内部语法为 TOML。**绝对不要**生成 `.toml` 后缀文件。
+
+> ⚠️ REST CLI 默认接受的输入文件后缀是 `.in`。生成的文件名应为 `{体系名}_{任务类型}.in`（例如 `water_energy.in`）。
 
 ---
 
