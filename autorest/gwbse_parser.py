@@ -21,6 +21,7 @@ from __future__ import annotations
 import re
 import textwrap
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 # ---------------------------------------------------------------------------
@@ -458,7 +459,8 @@ class GWBSEModule:
     # Output Parsing
     # ------------------------------------------------------------------
 
-    def parse_gwbse_output(self, text: str, expected_bse_spin: Optional[str] = None) -> GWBSEResult:
+    def parse_gwbse_output(self, text: str, expected_bse_spin: Optional[str] = None,
+                            requested_roots: Optional[int] = None) -> GWBSEResult:
         """Parse a complete REST GW-BSE output and return a structured result.
 
         Parameters
@@ -468,6 +470,9 @@ class GWBSEModule:
         expected_bse_spin : str or None
             If provided, the BSE spin type declared in the input card.
             Used to check for BSE type mismatch.
+        requested_roots : int or None
+            If provided, the number of BSE roots requested in the input card.
+            Merged with any value parsed from the output.
 
         Returns
         -------
@@ -481,11 +486,12 @@ class GWBSEModule:
         result.total_time_s = self._parse_total_time(text)
 
         # --- SCF ---
-        result.scf_converged = "SCF is converged" in text
         result.scf_energy = self._parse_scf_energy(text)
+        result.scf_converged = self._parse_scf_cycles(text) > 0
 
         # --- GW ---
-        result.gw_finished = "GW finished" in text or "Quasiparticle energy" in text
+        result.gw_finished = bool(re.search(
+            r"One\s+round\s+of\s+GW|Quasiparticle\s+Energies\s+from\s+GW", text, re.I))
         result.qp_warnings = self._collect_qp_warnings(text)
 
         # QP energies and Fermi Surface
@@ -507,6 +513,9 @@ class GWBSEModule:
         result.states = bse_info["states"]
         result.requested_roots = bse_info["requested_roots"]
         result.obtained_roots = bse_info["obtained_roots"]
+
+        if requested_roots is not None:
+            result.requested_roots = requested_roots
 
         # Davidson diagnostics
         dav_info = self._parse_davidson_diagnostics(text)
@@ -540,166 +549,41 @@ class GWBSEModule:
     # ------------------------------------------------------------------
 
     def _parse_qp_section(self, text: str) -> Dict[str, Any]:
-        """Extract quasiparticle energies and Fermi Surface information.
-
-        **Critical rule**: HOMO/LUMO are determined by the "Fermi Surface"
-        separator line, NOT by the sign of QP energies.
-
-        Returns
-        -------
-        dict
-            Keys: qp_energies, qp_energy_types, homo_index, lumo_index,
-            homo_qp_ha, lumo_qp_ha, fermi_found, qp_gap_ev.
-        """
+        _RE_QP_LINE = re.compile(
+            r"\((calculated|extrapolated)\)\s*QP\s+Energy\s+of\s+Orbital\s+#(\d+):\s*([+-]?\d+\.\d+)", re.I)
+        _RE_FERMI = re.compile(r"-{3,}\s*Fermi\s+Surface\s*-{3,}", re.I)
+        HA_TO_EV = 27.2113845
         info: Dict[str, Any] = {
-            "qp_energies": [],
-            "qp_energy_types": [],
-            "homo_index": None,
-            "lumo_index": None,
-            "homo_qp_ha": None,
-            "lumo_qp_ha": None,
-            "fermi_found": False,
-            "qp_gap_ev": None,
+            "qp_energies": [], "qp_energy_types": [], "homo_index": None,
+            "lumo_index": None, "homo_qp_ha": None, "lumo_qp_ha": None,
+            "fermi_found": False, "qp_gap_ev": None,
         }
-
-        # Locate the QP energy block — typical section header patterns
-        qp_block_start = None
-        qp_block_end = None
-
-        for pattern in [
-            r"Quasiparticle energies?\s*\(.*?\)",
-            r"Quasiparticle energy corrections?",
-            r"QP energies?\s*\(.*?\)",
-            r"G0W0 quasiparticle energies?",
-        ]:
-            m = re.search(pattern, text, re.IGNORECASE)
+        entries = []
+        for lineno, line in enumerate(text.splitlines(), start=1):
+            m = _RE_QP_LINE.search(line)
             if m:
-                qp_block_start = m.start()
-                break
-
-        if qp_block_start is None:
+                entries.append((int(m.group(2)), float(m.group(3)), m.group(1).lower(), lineno))
+        if not entries:
             return info
-
-        # Find the end of the QP block (next blank line or section header)
-        tail = text[qp_block_start:]
-        m_end = re.search(r"\n\s*\n(?:[A-Z]|\Z)", tail)
-        if m_end:
-            qp_block_end = qp_block_start + m_end.start()
-        else:
-            qp_block_end = len(text)
-
-        block = text[qp_block_start:qp_block_end]
-
-        # Scan for "Fermi Surface" or "Fermi level" separator
-        fermi_pattern = re.compile(
-            r"^\s*(?:-+\s*)?(?:Fermi\s*Surface|Fermi\s*level|Fermi\s*energy)"
-            r"\s*(?:-+\s*)?$",
-            re.IGNORECASE | re.MULTILINE,
-        )
-        fermi_match = fermi_pattern.search(block)
-
-        # Also try alternate patterns (some REST versions use different formatting)
-        if not fermi_match:
-            fermi_pattern2 = re.compile(
-                r"---+\s*Fermi",
-                re.IGNORECASE,
-            )
-            fermi_match = fermi_pattern2.search(block)
-
-        if fermi_match:
+        fermi = _RE_FERMI.search(text)
+        if fermi:
             info["fermi_found"] = True
-
-        # Parse individual QP lines
-        # Typical format:
-        #   Orbital    X  (occ/vir)  QP energy:  -0.xxxx Ha   Type: calculated
-        # or:
-        #   MO  3 (occ)  -0.4982 Ha  (extrapolated)
-
-        lines = block.splitlines()
-        occ_entries: List[Tuple[int, float, str]] = []  # (index, energy, type)
-        vir_entries: List[Tuple[int, float, str]] = []
-
-        for line in lines:
-            # Skip header / separator lines
-            if re.match(r"^\s*(?:Quasiparticle|QP |G0W0|Orbital|---|={3,}|\s*$)", line, re.IGNORECASE):
-                continue
-            if fermi_pattern.match(line) if fermi_match else False:
-                continue
-
-            # Try to extract: index, occ/vir label, QP energy, type
-            # Pattern 1: "MO 5 (occ) -0.4982 Ha (extrapolated)"
-            m = re.search(
-                r"(?:MO|Orbital)\s+(\d+)\s*\(?(occ|vir|occupied|virtual)\)?\s+"
-                r"([+-]?\d+\.\d+)\s*(?:Ha|eV)?\s*(?:\(?(calculated|extrapolated)\)?)?",
-                line,
-                re.IGNORECASE,
-            )
-            if not m:
-                # Pattern 2: table format  "  5   occ   -0.4982   extrapolated"
-                m = re.search(
-                    r"^\s*(\d+)\s+(occ|vir|occupied|virtual)\s+"
-                    r"([+-]?\d+\.\d+)\s*(calculated|extrapolated)?",
-                    line,
-                    re.IGNORECASE,
-                )
-            if not m:
-                # Pattern 3: free-form "QP energy ... orbital 5 ..."
-                m2 = re.search(
-                    r"orbital\s+(\d+).*?([+-]?\d+\.\d+)\s*(?:Ha|eV)?",
-                    line,
-                    re.IGNORECASE,
-                )
-                if m2:
-                    idx = int(m2.group(1))
-                    energy = float(m2.group(2))
-                    etype = "calculated"  # default
-                    info["qp_energies"].append(energy)
-                    info["qp_energy_types"].append(etype)
-                continue
-
-            idx = int(m.group(1))
-            occ_vir = m.group(2).lower()
-            energy = float(m.group(3))
-            etype = (m.group(4) or "calculated").lower() if m.lastindex and m.lastindex >= 4 else "calculated"
-
+            sep_line = text[: fermi.start()].count("\n") + 1
+            occupied = [e for e in entries if e[3] < sep_line]
+            virtual = [e for e in entries if e[3] > sep_line]
+        else:
+            occupied, virtual = [], []
+        for _, energy, etype, _ in sorted(entries):
             info["qp_energies"].append(energy)
             info["qp_energy_types"].append(etype)
-
-            if occ_vir.startswith("occ"):
-                occ_entries.append((idx, energy, etype))
-            elif occ_vir.startswith("vir"):
-                vir_entries.append((idx, energy, etype))
-
-        # Determine HOMO/LUMO using Fermi Surface separator logic:
-        # HOMO = highest occupied, LUMO = lowest virtual.
-        # If Fermi Surface was found, use the separator context:
-        # everything above it is occupied, below is virtual.
-        if fermi_match:
-            # Split block at Fermi Surface and classify lines
-            above_fermi = block[: fermi_match.start()]
-            below_fermi = block[fermi_match.end():]
-
-            # Occupied orbitals are above the Fermi Surface in REST output
-            for entry in occ_entries:
-                idx_line = [l for l in above_fermi.splitlines() if f" {entry[0]} " in l or f"({entry[0]})" in l]
-                # Already classified, trust occ/vir label
-                pass
-
-        # HOMO = max index among occupied; LUMO = min index among virtual
-        if occ_entries:
-            occ_entries.sort(key=lambda x: x[0])
-            info["homo_index"] = occ_entries[-1][0]
-            info["homo_qp_ha"] = occ_entries[-1][1]
-
-        if vir_entries:
-            vir_entries.sort(key=lambda x: x[0])
-            info["lumo_index"] = vir_entries[0][0]
-            info["lumo_qp_ha"] = vir_entries[0][1]
-
-        # Compute QP gap in eV
+        if occupied:
+            idx, energy, _, _ = max(occupied, key=lambda e: e[0])
+            info["homo_index"], info["homo_qp_ha"] = idx, energy
+        if virtual:
+            idx, energy, _, _ = min(virtual, key=lambda e: e[0])
+            info["lumo_index"], info["lumo_qp_ha"] = idx, energy
         if info["homo_qp_ha"] is not None and info["lumo_qp_ha"] is not None:
-            info["qp_gap_ev"] = (info["lumo_qp_ha"] - info["homo_qp_ha"]) * 27.211386245988
-
+            info["qp_gap_ev"] = (info["lumo_qp_ha"] - info["homo_qp_ha"]) * HA_TO_EV
         return info
 
     # ------------------------------------------------------------------
@@ -709,200 +593,62 @@ class GWBSEModule:
     def _parse_bse_section(
         self, text: str, expected_bse_spin: Optional[str] = None
     ) -> Dict[str, Any]:
-        """Parse the BSE excitation energy section.
-
-        Extracts: bse_spin, bse_tda, number of roots, and per-state
-        excitation energies, oscillator strengths, and dominant transitions.
-
-        Critical rules:
-        - Triplet oscillator strength = 0 is NORMAL.
-        - "First 0 excitations" = Davidson failure.
-        """
+        _RE_BSE_STATE = re.compile(r"#(\d+)\s+Excitation\s+energy\s*=\s*([+-]?\d+(?:\.\d+)?)", re.I)
+        _RE_BSE_OSC = re.compile(r"Oscillator\s+Strength\s*:\s*([+-]?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)", re.I)
+        _RE_BSE_TRANS = re.compile(r"#(\d+)->#(\d+)\s*,\s*amplitude\s*=\s*([+-]?\d+(?:\.\d+)?)", re.I)
+        _RE_BSE_WINDOW = re.compile(r"(\d+)\s+excitations?\s+within\s+the\s+window", re.I)
+        _RE_NROOTS = re.compile(r"nroots?\s*=\s*(\d+)", re.I)
+        HA_TO_EV = 27.2113845
         info: Dict[str, Any] = {
-            "bse_spin": None,
-            "bse_tda": True,
-            "bse_finished": False,
-            "states": [],
-            "requested_roots": 0,
-            "obtained_roots": 0,
+            "bse_spin": None, "bse_tda": True, "bse_finished": False,
+            "states": [], "requested_roots": 0, "obtained_roots": 0,
         }
-
-        # Detect BSE spin type
-        for line in text.splitlines():
-            m_spin = re.search(r"BSE\s+(?:type|spin)\s*[:=]\s*(singlet|triplet)", line, re.IGNORECASE)
-            if m_spin:
-                info["bse_spin"] = m_spin.group(1).lower()
-                break
-            m_spin2 = re.search(r"(singlet|triplet)\s+BSE", line, re.IGNORECASE)
-            if m_spin2:
-                info["bse_spin"] = m_spin2.group(1).lower()
-                break
-
-        # Detect TDA
-        if re.search(r"TDA\s*(?:approximation)?\s*(?:is|:)?\s*(?:on|true|yes|used)", text, re.IGNORECASE):
-            info["bse_tda"] = True
-        elif re.search(r"full\s*BSE|full\s*response|without\s*TDA", text, re.IGNORECASE):
+        m = re.search(r"BSE\s+Type\s*:\s*(singlet|triplet)", text, re.I)
+        if m:
+            info["bse_spin"] = m.group(1).lower()
+        if re.search(r"full\s*BSE|without\s*TDA", text, re.I):
             info["bse_tda"] = False
-
-        # Check if BSE finished
-        info["bse_finished"] = bool(
-            re.search(r"BSE\s+(?:calculation\s+)?finished|BSE\s+excitation\s+energies", text, re.IGNORECASE)
-        )
-
-        # --- Parse excitation table ---
-        # Locate the BSE results table
-        bse_table_start = None
-        for pattern in [
-            r"BSE\s+excitation\s+energies?\s*[:=]?",
-            r"Excited\s+state\s+(?:energies|results)",
-            r"\bState\b.*\bEnergy\b.*\bOsc\.?\s*Strength\b",
-        ]:
-            m = re.search(pattern, text, re.IGNORECASE)
+        window = _RE_BSE_WINDOW.search(text)
+        if not window:
+            return info
+        info["bse_finished"] = True
+        info["requested_roots"] = int(window.group(1))
+        body = text[window.end():]
+        end = re.search(r"\n\s*\n", body)
+        if end:
+            body = body[: end.start()]
+        states = []
+        for line in body.splitlines():
+            m = _RE_BSE_STATE.search(line)
             if m:
-                bse_table_start = m.start()
-                break
-
-        if bse_table_start is None:
-            return info
-
-        # Find table body
-        tail = text[bse_table_start:]
-        m_end = re.search(r"\n\s*\n(?:[A-Z]|\Z)", tail)
-        table_block = tail[: m_end.start()] if m_end else tail
-
-        # Detect "First 0 excitations" — Davidson failure indicator
-        if re.search(r"First\s+0\s+excitations?", table_block):
-            info["obtained_roots"] = 0
-            return info
-
-        # Parse state lines
-        # Typical format:
-        #   State   1  E =   0.2500 Ha    6.8029 eV   182.2 nm   f = 0.0123
-        # or tabular with transition contributions below
-
-        state_pattern = re.compile(
-            r"(?:State|Root|Excited\s*state)\s*(\d+)\s*"
-            r"(?:E\s*=|energy\s*[:=]\s*)?"
-            r"([+-]?\d+\.\d+)\s*(?:Ha|eV|a\.u\.)?\s*"
-            r"(\d+\.\d+)?\s*(?:eV)?\s*"
-            r"(\d+\.\d+)?\s*(?:nm)?\s*"
-            r"(?:f\s*=|osc\.?\s*strength\s*[:=]\s*)?"
-            r"(\d+\.\d+(?:[eE][+-]?\d+)?)",
-            re.IGNORECASE,
-        )
-
-        # More robust: parse line-by-line
-        lines = table_block.splitlines()
-        current_state: Optional[Dict[str, Any]] = None
-
-        for line in lines:
-            # Try to match a state header line
-            m_state = re.search(
-                r"(?:State|Root)\s+(\d+)\s*"
-                r"(?:E\s*[:=]\s*)?([+-]?\d+\.\d+)\s*(?:Ha|a\.u\.)?\s*"
-                r"(\d+\.\d+)?\s*(?:eV)?\s*"
-                r"(\d+\.\d+)?\s*(?:nm)?"
-                r".*?(?:f|osc)\s*[:=]?\s*(\d+\.\d+(?:[eE][+-]?\d+)?)",
-                line,
-                re.IGNORECASE,
-            )
-            if m_state:
-                # Save previous state
-                if current_state:
-                    info["states"].append(self._build_bse_state(current_state))
-
-                idx = int(m_state.group(1))
-                energy_ha = float(m_state.group(2))
-                energy_ev = float(m_state.group(3)) if m_state.group(3) else energy_ha * 27.211386245988
-                wavelength_nm = float(m_state.group(4)) if m_state.group(4) else (
-                    1240.0 / energy_ev if energy_ev > 0 else 0.0
-                )
-                osc = float(m_state.group(5)) if m_state.group(5) else 0.0
-
-                current_state = {
-                    "index": idx,
-                    "energy_ha": energy_ha,
-                    "energy_ev": energy_ev,
-                    "wavelength_nm": wavelength_nm,
-                    "oscillator_strength": osc,
-                    "transition_dipole": [0.0, 0.0, 0.0],
+                e_ha = float(m.group(2))
+                states.append({
+                    "index": int(m.group(1)), "energy_ha": e_ha,
+                    "energy_ev": e_ha * HA_TO_EV,
+                    "wavelength_nm": 1239.84 / (e_ha * HA_TO_EV) if e_ha > 0 else 0.0,
+                    "oscillator_strength": 0.0, "transition_dipole": [0.0, 0.0, 0.0],
                     "dominant_transitions": [],
-                }
+                })
                 continue
-
-            # Try simpler two-column format: "State  N   energy_eV   osc_strength"
-            m_simple = re.search(
-                r"^\s*(\d+)\s+([+-]?\d+\.\d+)\s+(\d+\.\d+(?:[eE][+-]?\d+)?)",
-                line,
-            )
-            if m_simple and not current_state:
-                idx = int(m_simple.group(1))
-                energy_ev = float(m_simple.group(2))
-                energy_ha = energy_ev / 27.211386245988
-                wavelength_nm = 1240.0 / energy_ev if energy_ev > 0 else 0.0
-                osc = float(m_simple.group(3))
-                info["states"].append(
-                    BSEState(
-                        index=idx,
-                        energy_ha=energy_ha,
-                        energy_ev=energy_ev,
-                        wavelength_nm=wavelength_nm,
-                        oscillator_strength=osc,
-                    )
-                )
+            m = _RE_BSE_OSC.search(line)
+            if m and states:
+                states[-1]["oscillator_strength"] = float(m.group(1))
                 continue
-
-            # Parse transition contributions for the current state
-            if current_state:
-                # Transition dipole moment line
-                m_dip = re.search(
-                    r"(?:trans|dipole|transition\s*dipole).*?\(\s*([+-]?\d+\.\d+)\s*,\s*([+-]?\d+\.\d+)\s*,\s*([+-]?\d+\.\d+)\s*\)",
-                    line,
-                    re.IGNORECASE,
-                )
-                if m_dip:
-                    current_state["transition_dipole"] = [
-                        float(m_dip.group(1)),
-                        float(m_dip.group(2)),
-                        float(m_dip.group(3)),
-                    ]
-
-                # Dominant transition: "occ -> vir   weight"
-                m_trans = re.search(
-                    r"(\d+)\s*(?:->|→)\s*(\d+)\s+([+-]?\d+\.\d+)",
-                    line,
-                )
-                if m_trans:
-                    current_state["dominant_transitions"].append({
-                        "occ": int(m_trans.group(1)),
-                        "vir": int(m_trans.group(2)),
-                        "weight": float(m_trans.group(3)),
-                    })
-
-        # Save last state
-        if current_state:
-            info["states"].append(self._build_bse_state(current_state))
-
+            m = _RE_BSE_TRANS.search(line)
+            if m and states:
+                states[-1]["dominant_transitions"].append({
+                    "from_orbital": int(m.group(1)), "to_orbital": int(m.group(2)),
+                    "amplitude": float(m.group(3)),
+                })
+        info["states"] = [
+            BSEState(**{**s, "dominant_transitions": sorted(
+                s["dominant_transitions"], key=lambda d: abs(d["amplitude"]), reverse=True)[:5]})
+            for s in states
+        ]
         info["obtained_roots"] = len(info["states"])
-
-        # Try to detect requested roots from header
-        m_req = re.search(
-            r"(?:requested|target|n\s*roots?|nroots?)\s*[:=]?\s*(\d+)",
-            table_block,
-            re.IGNORECASE,
-        )
-        if m_req:
-            info["requested_roots"] = int(m_req.group(1))
-        else:
-            # Look earlier in the text
-            m_req2 = re.search(
-                r"davidson_target_excitations\s*[:=]?\s*(\d+)",
-                text,
-                re.IGNORECASE,
-            )
-            if m_req2:
-                info["requested_roots"] = int(m_req2.group(1))
-
+        m = _RE_NROOTS.search(text)
+        if m:
+            info["requested_roots"] = max(info["requested_roots"], int(m.group(1)))
         return info
 
     @staticmethod
@@ -923,66 +669,17 @@ class GWBSEModule:
     # ------------------------------------------------------------------
 
     def _parse_davidson_diagnostics(self, text: str) -> Dict[str, Any]:
-        """Extract Davidson eigensolver diagnostics.
-
-        Returns
-        -------
-        dict
-            Keys: iterations, converged, restart_count, residuals.
-        """
-        info: Dict[str, Any] = {
-            "iterations": 0,
-            "converged": False,
-            "restart_count": 0,
-            "residuals": [],
-        }
-
-        # Find Davidson block
-        dav_block_start = None
-        for pattern in [
-            r"Davidson\s+(?:diagonalization|solver|iterations?)",
-            r"BSE\s+Davidson",
-        ]:
-            m = re.search(pattern, text, re.IGNORECASE)
-            if m:
-                dav_block_start = m.start()
-                break
-
-        if dav_block_start is None:
-            return info
-
-        tail = text[dav_block_start:]
-        m_end = re.search(r"\n\s*\n(?:[A-Z]|\Z)", tail)
-        dav_block = tail[: m_end.start()] if m_end else tail
-
-        # Count iterations
-        iter_matches = re.findall(r"Iteration\s+(\d+)", dav_block, re.IGNORECASE)
-        if iter_matches:
-            info["iterations"] = max(int(i) for i in iter_matches)
-
-        # Check convergence
-        info["converged"] = bool(
-            re.search(
-                r"(?:Davidson\s+)?converged|convergence\s+reached|all\s+roots\s+converged",
-                dav_block,
-                re.IGNORECASE,
-            )
-        )
-
-        # Count restarts
-        restart_matches = re.findall(r"Restart(?:ing|ed)?\s*(?:#?\s*(\d+))?", dav_block, re.IGNORECASE)
-        if restart_matches:
-            # If numbered restarts exist, use the last one
-            numbered = [int(r) for r in restart_matches if r]
-            if numbered:
-                info["restart_count"] = max(numbered)
-            else:
-                info["restart_count"] = len(restart_matches)
-
-        # Collect residuals
-        for m in re.finditer(r"(?:residual|res)\s*[:=]?\s*(\d+\.\d+(?:[eE][+-]?\d+)?)", dav_block, re.IGNORECASE):
-            info["residuals"].append(float(m.group(1)))
-
+        _RE_DAV_ITER = re.compile(r"^\s*iter\s+(\d+):\s*space=(\d+),\s*converged=(\d+)/(\d+)", re.I | re.M)
+        info = {"iterations": 0, "converged": False, "restart_count": 0, "residuals": []}
+        iters = _RE_DAV_ITER.findall(text)
+        if iters:
+            info["iterations"] = max(int(i[0]) for i in iters)
+            spaces = [int(i[1]) for i in iters]
+            info["restart_count"] = sum(1 for a, b in zip(spaces, spaces[1:]) if b < a)
+            last = iters[-1]
+            info["converged"] = int(last[2]) == int(last[3])
+        if re.search(r"Davidson\s+Solver\s+has\s+converged", text, re.I):
+            info["converged"] = True
         return info
 
     # ------------------------------------------------------------------
@@ -991,40 +688,25 @@ class GWBSEModule:
 
     @staticmethod
     def _parse_scf_energy(text: str) -> Optional[float]:
-        """Extract the final SCF total energy in Hartree."""
-        # Try "Final SCF energy" line
-        m = re.search(r"Final\s+SCF\s+energy\s*[:=]?\s*([+-]?\d+\.\d+)", text, re.IGNORECASE)
+        _RE_SCF_FINAL = re.compile(r"The\s+SCF\s+energy\s*:\s*([+-]?\d+\.\d+)\s*Ha", re.I)
+        _RE_SCF_LAST = re.compile(r"Energy:\s+([+-]?\d+\.\d+)\s+Ha", re.I)
+        m = _RE_SCF_FINAL.search(text)
         if m:
             return float(m.group(1))
-        # Try "Total energy" last occurrence
-        energies = re.findall(r"Total\s+energy\s*[:=]?\s*([+-]?\d+\.\d+)", text, re.IGNORECASE)
-        if energies:
-            return float(energies[-1])
-        # Try "SCF Done"
-        m = re.search(r"SCF\s+Done\s*[:=]?\s*E\s*=\s*([+-]?\d+\.\d+)", text, re.IGNORECASE)
-        if m:
-            return float(m.group(1))
-        return None
+        hits = _RE_SCF_LAST.findall(text)
+        return float(hits[-1]) if hits else None
+
+    @staticmethod
+    def _parse_scf_cycles(text: str) -> int:
+        _RE_SCF_CYCLES = re.compile(r"SCF\s+is\s+converged\s+after\s+(\d+)\s+iterations", re.I)
+        hits = _RE_SCF_CYCLES.findall(text)
+        return int(hits[-1]) if hits else 0
 
     @staticmethod
     def _parse_total_time(text: str) -> Optional[float]:
-        """Extract total wall-clock time in seconds."""
-        m = re.search(
-            r"(?:Total|Wall)\s*(?:CPU|clock)?\s*time\s*[:=]?\s*(\d+\.?\d*)\s*(?:s|sec|seconds?)",
-            text,
-            re.IGNORECASE,
-        )
-        if m:
-            return float(m.group(1))
-        # Try "Mission accomplished" timing line
-        m = re.search(
-            r"Mission\s+accomplished.*?(\d+\.?\d*)\s*(?:s|sec|seconds?)",
-            text,
-            re.IGNORECASE,
-        )
-        if m:
-            return float(m.group(1))
-        return None
+        _RE_TIME = re.compile(r"Overall\s*\|:\s*([\d.]+)\s*s\s+for\s+the\s+whole\s+job", re.I)
+        m = _RE_TIME.search(text)
+        return float(m.group(1)) if m else None
 
     @staticmethod
     def _collect_qp_warnings(text: str) -> List[str]:
@@ -1314,14 +996,14 @@ class GWBSEModule:
             if result.qp_gap_ev is not None:
                 d_qp = abs(result.qp_gap_ev - golden["qp_gap_ev"])
                 deviations.append(f"QP gap Δ = {d_qp:.4f} eV")
+            qp_ok = (result.qp_gap_ev is None) or (abs(result.qp_gap_ev - golden["qp_gap_ev"]) <= regression_tolerance_ev)
+            ex_ok = True
             if result.states:
-                s1_ev = min(s.energy_ev for s in result.states)
-                d_s1 = abs(s1_ev - golden["S1_ev"])
-                deviations.append(f"S1 Δ = {d_s1:.4f} eV")
-            all_ok = all(
-                abs(result.qp_gap_ev - golden["qp_gap_ev"]) <= regression_tolerance_ev if result.qp_gap_ev else True,
-                abs(min(s.energy_ev for s in result.states) - golden["S1_ev"]) <= regression_tolerance_ev if result.states else True,
-            )
+                target = golden["T1_ev"] if result.bse_spin == "triplet" else golden["S1_ev"]
+                d_ex = abs(min(s.energy_ev for s in result.states) - target)
+                deviations.append(f"{'T1' if result.bse_spin == 'triplet' else 'S1'} Δ = {d_ex:.4f} eV")
+                ex_ok = d_ex <= regression_tolerance_ev
+            all_ok = qp_ok and ex_ok
             checks.append({
                 "name": f"Regression ({check_regression})",
                 "passed": all_ok,
@@ -1340,21 +1022,18 @@ class GWBSEModule:
     # ------------------------------------------------------------------
 
     def parse_output(self, path: str, expected_bse_spin: Optional[str] = None) -> GWBSEResult:
-        """Parse a GW-BSE output file from disk.
-
-        Parameters
-        ----------
-        path : str
-            Path to the REST output file.
-        expected_bse_spin : str or None
-            Expected BSE spin type.
-
-        Returns
-        -------
-        GWBSEResult
-        """
-        with open(path, "r", encoding="utf-8", errors="replace") as fh:
-            text = fh.read()
+        raw = Path(path).read_bytes()
+        if raw.startswith(b"\xff\xfe") or raw.startswith(b"\xfe\xff"):
+            text = raw.decode("utf-16")
+        else:
+            for enc in ("utf-8-sig", "utf-8"):
+                try:
+                    text = raw.decode(enc)
+                    break
+                except UnicodeDecodeError:
+                    continue
+            else:
+                text = raw.decode("cp936", errors="replace")
         return self.parse_gwbse_output(text, expected_bse_spin=expected_bse_spin)
 
 

@@ -344,13 +344,34 @@ class AutoREST:
             result["singlet_result"] = singlet_result
             result["triplet_result"] = triplet_result
 
-            # Parse GW-BSE outputs
+            # Parse GW-BSE outputs (with requested_roots for validation)
             parsed_s = self.gwbse.parse_gwbse_output(
-                singlet_result.stdout, expected_bse_spin="singlet"
+                singlet_result.stdout, expected_bse_spin="singlet",
+                requested_roots=n_roots,
             )
             parsed_t = self.gwbse.parse_gwbse_output(
-                triplet_result.stdout, expected_bse_spin="triplet"
+                triplet_result.stdout, expected_bse_spin="triplet",
+                requested_roots=n_roots,
             )
+
+            # P1-2: Guard against silent empty parse results
+            if not parsed_t.states or parsed_s.qp_gap_ev is None:
+                raise RuntimeError(
+                    "GW-BSE parse produced empty results — possible REST output format "
+                    "change or encoding issue. Refusing to report unreliable delta_est_ev."
+                )
+
+            # GW-BSE specific validation (connect validate_gwbse into pipeline)
+            for parsed, spin in [(parsed_s, "singlet"), (parsed_t, "triplet")]:
+                gwbse_checks = self.gwbse.validate_gwbse(
+                    parsed, expected_bse_spin=spin,
+                    check_regression=system_name if system_name in __import__(
+                        'autorest.gwbse_parser', fromlist=['GOLDEN_REGRESSION']
+                    ).GOLDEN_REGRESSION else None,
+                )
+                if hasattr(parsed, 'gwbse_validation'):
+                    parsed.gwbse_validation = gwbse_checks
+
             result["delta_est_ev"] = self.gwbse.compute_delta_est(parsed_s, parsed_t)
             result["singlet_parsed"] = parsed_s
             result["triplet_parsed"] = parsed_t

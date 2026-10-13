@@ -129,9 +129,14 @@ class OutputParser:
     _RE_SCF_CONVERGED: re.Pattern = re.compile(
         r"SCF\s+(?:is\s+)?converged", re.IGNORECASE
     )
-    _RE_SCF_ENERGY: re.Pattern = re.compile(
-        r"(?:Total energy|SCF energy)\s*[:=]?\s*(-?\d+\.\d+)",
-        re.IGNORECASE,
+    _RE_SCF_FINAL: re.Pattern = re.compile(
+        r"The\s+SCF\s+energy\s*:\s*([+-]?\d+\.\d+)\s*Ha", re.IGNORECASE,
+    )
+    _RE_SCF_LAST: re.Pattern = re.compile(
+        r"Energy:\s+([+-]?\d+\.\d+)\s+Ha", re.IGNORECASE,
+    )
+    _RE_SCF_CONVERGED_AFTER: re.Pattern = re.compile(
+        r"SCF\s+is\s+converged\s+after\s+(\d+)\s+iterations", re.IGNORECASE,
     )
     _RE_SCF_ITERATION: re.Pattern = re.compile(
         r"\b(?:SCF\s+)?(?:cycle|iteration)\s*\d+\s*[:=]",
@@ -416,18 +421,23 @@ class OutputParser:
             info["converged"] = True
 
         # Energy
-        energy = self._extract_float_after(
-            text, self._RE_SCF_ENERGY, group=1
-        )
-        if energy is not None:
-            info["energy"] = energy
+        # Try the definitive summary line first
+        m = self._RE_SCF_FINAL.search(text)
+        if m:
+            info["energy"] = float(m.group(1))
+        else:
+            # Fall back to last "Energy:" line
+            hits = self._RE_SCF_LAST.findall(text)
+            info["energy"] = float(hits[-1]) if hits else None
 
-        # Cycle count – look for iteration markers
-        cycles = len(self._RE_SCF_ITERATION.findall(text))
-        if cycles == 0:
-            # Fallback: count lines that look like SCF-cycle print-outs
-            cycles = len(self._RE_SCF_CYCLE_LINE.findall(text))
-        info["cycles"] = cycles if cycles else 0
+        # Cycle count – look for convergence declaration
+        hits = self._RE_SCF_CONVERGED_AFTER.findall(text)
+        info["cycles"] = int(hits[-1]) if hits else 0
+        if info["cycles"] == 0:
+            cycles = len(self._RE_SCF_ITERATION.findall(text))
+            if cycles == 0:
+                cycles = len(self._RE_SCF_CYCLE_LINE.findall(text))
+            info["cycles"] = cycles if cycles else 0
 
         # Convergence metrics
         info["energy_change"] = self._extract_float_after(
@@ -753,15 +763,17 @@ class OutputParser:
         text: str,
         pattern: Union[str, re.Pattern],
         group: int = 0,
+        take_last: bool = False,
     ) -> Optional[float]:
-        """Return the first captured float following *pattern*.
+        """Extract a float after a pattern match.
 
-        Parameters
-        ----------
-        text : str
-        pattern : str or compiled regex
-        group : int
-            The capture group that contains the float value.
+        Args:
+            text: The text to search.
+            pattern: Regex pattern with a capturing group.
+            group: The capture group that contains the float value.
+            take_last: If True, return the LAST match; otherwise the FIRST.
+                WARNING: For SCF energy, always use the definitive "The SCF energy"
+                line instead of this method, as it may match initial-guess energies.
 
         Returns
         -------
@@ -769,14 +781,29 @@ class OutputParser:
         """
         try:
             if isinstance(pattern, str):
-                m = re.search(pattern, text)
+                matches = re.findall(pattern, text)
             else:
-                m = pattern.search(text)
-            if m:
-                return float(m.group(group))
+                matches = pattern.findall(text)
         except (ValueError, TypeError, IndexError):
-            pass
-        return None
+            return None
+
+        if not matches:
+            return None
+
+        # matches may be a list of strings (single group) or tuples (multi-group)
+        def _to_float(val):
+            if isinstance(val, (tuple, list)):
+                try:
+                    return float(val[group - 1] if group > 0 else val[0])
+                except (IndexError, ValueError, TypeError):
+                    return None
+            return float(val)
+
+        idx = -1 if take_last else 0
+        try:
+            return _to_float(matches[idx])
+        except (ValueError, IndexError, TypeError):
+            return None
 
     @staticmethod
     def _extract_block(

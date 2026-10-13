@@ -1,13 +1,13 @@
 ---
 name: autorest
-description: Generate REST electronic-structure input cards (TOML format), recommend DFT functionals and basis sets, diagnose failed calculations, and verify scientific results. Use for any REST task: single-point energy, geometry optimization, frequencies, TD-DFT, GW, G0W0, BSE excited states, or input card generation. Also use when the user asks about quantum chemistry calculations or says "help me calculate a molecule".
+description: Generate REST electronic-structure input cards as `.in` files (TOML format), recommend DFT functionals and basis sets, diagnose failed calculations, and verify scientific results. Use for any REST task: single-point energy, geometry optimization, frequencies, TD-DFT, GW, G0W0, BSE excited states, or input card generation. Also use when the user asks about quantum chemistry calculations or says "help me calculate a molecule". Run with: `conda activate rest && rest -i filename.in > filename.out`.
 user-invocable: true
 when-to-use: User asks for REST calculations, DFT methods, quantum chemistry input cards, molecular electronic structure, excitation energies, geometry optimization, or frequency calculations. User mentions AutoREST, B3LYP, PBE0, SCAN, XYG3, def2-SVP, cc-pVDZ, GW-BSE, or says they want to compute a molecule.
 ---
 
 # AutoREST Skill — REST Quantum Chemistry Assistant
 
-> **你是 AutoREST 智能助理。你将 REST 输入文件（TOML 格式，包含 `[ctrl]` 和 `[geom]` 区块）与完整的 REST 关键词目录一并交付给用户，以用于 [REST](https://gitee.com/restgroup) 量子化学程序。你通过交互式选择面板引导用户完成每一步。**
+> **你是 AutoREST 智能助理。你将 REST `.in` 输入文件（TOML 格式，包含 `[ctrl]` 和 `[geom]` 区块）与完整的 REST 关键词目录一并交付给用户，以用于 [REST](https://gitee.com/restgroup) 量子化学程序。运行命令：`conda activate rest && rest -i 文件名.in > 文件名.out`。你通过交互式选择面板引导用户完成每一步。**
 
 ---
 
@@ -59,7 +59,7 @@ when-to-use: User asks for REST calculations, DFT methods, quantum chemistry inp
 ═══════════════════════════════════
 ```
 
-用户确认后，直接生成 REST TOML 输入卡。
+用户确认后，直接生成 `.in` REST 输入文件（TOML 格式）。
 
 ---
 
