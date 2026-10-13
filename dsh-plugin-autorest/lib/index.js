@@ -1,254 +1,224 @@
-// AutoREST v3.0.0 — Cordis plugin with real Tool registration
-// Registers 3 tools (detect REST, generate input, parse output) 
-// plus a bundled Skill and system prompt guidance.
-import { readFileSync } from "node:fs";
-import { dirname } from "node:path";
+// AutoREST v4 — Cordis plugin with real Tool registration + JSON bridge
+// Registers 3 tools (detect_rest, generate_input, parse_output)
+// Uses DSH shell seam (ctx.shell) to invoke Python bridge — no raw child_process.
+import { readFileSync, existsSync } from "node:fs";
+import { dirname, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { execSync } from "node:child_process";
-import { platform, homedir } from "node:os";
-import { existsSync, statSync } from "node:fs";
-import { join } from "node:path";
 
 export const name = "autorest";
-export const inject = ["tools", "skills", "systemPrompt"];
+export const inject = ["tools", "skills", "systemPrompt", "shell"];
 
-// ============================================================================
-// Tool 1: autorest_detect_rest — find the REST executable
-// ============================================================================
-async function toolDetectRest(_args, _exec) {
-  const results = [];
-  const locatorExe = platform() === "win32" ? "rest.exe" : "rest";
+// ══════════════════════════════════════════════════════════════════
+// Configuration
+// ══════════════════════════════════════════════════════════════════
+const DEFAULTS = {
+  pythonExecutable: null,          // auto-detect from CONDA_PREFIX / PATH
+  bridgeTimeoutMs: 30000,
+  maxParseBytes: 4 * 1024 * 1024, // 4 MB
+  skillEnabled: true,
+  guidanceMode: "adaptive",       // "adaptive" | "guided"
+};
 
-  // 1. Check conda environments
-  const condaDirs = [
-    join(homedir(), "anaconda3", "envs"),
-    join(homedir(), "miniconda3", "envs"),
-    join(homedir(), "miniforge3", "envs"),
-    "C:\\ProgramData\\anaconda3\\envs",
-    "C:\\ProgramData\\miniconda3\\envs",
-    "/opt/anaconda3/envs",
-    "/opt/miniconda3/envs",
-  ];
-  for (const envsDir of condaDirs) {
-    try {
-      if (!existsSync(envsDir)) continue;
-      const { readdirSync: rd } = await import("node:fs");
-      for (const env of rd(envsDir)) {
-        const candidate = join(envsDir, env, "bin", locatorExe);
-        const candidateWin = join(envsDir, env, "Library", "bin", locatorExe);
-        for (const c of [candidate, candidateWin]) {
-          if (existsSync(c) && statSync(c).isFile()) {
-            try {
-              const ver = execSync(`"${c}" --version 2>&1 || echo ""`, { encoding: "utf8", timeout: 5000 }).trim();
-              results.push({ path: c, version: ver || "unknown", source: "conda", env });
-            } catch (_) {
-              results.push({ path: c, version: "detected (version unknown)", source: "conda", env });
-            }
-          }
-        }
-      }
-    } catch (_) { /* env dir not readable */ }
+function resolvePython() {
+  const exe = DEFAULTS.pythonExecutable;
+  if (exe && existsSync(exe)) return exe;
+  // Try CONDA_PREFIX
+  const prefix = process.env.CONDA_PREFIX;
+  if (prefix) {
+    const candidates = [
+      resolve(prefix, "bin", "python3"),
+      resolve(prefix, "bin", "python"),
+      resolve(prefix, "Library", "bin", "python.exe"),
+    ];
+    for (const c of candidates) if (existsSync(c)) return c;
   }
+  // Fallback
+  return process.platform === "win32" ? "python" : "python3";
+}
 
-  // 2. Check system PATH
+const BRIDGE_SCRIPT = fileURLToPath(new URL("../../vendor/python/autorest/dsh_bridge.py", import.meta.url));
+
+// ══════════════════════════════════════════════════════════════════
+// Bridge invoker — uses ctx.shell (DSH shell seam)
+// ══════════════════════════════════════════════════════════════════
+async function invokeBridge(ctx, action, payload, signal) {
+  const python = resolvePython();
+  const stdin = JSON.stringify({ protocol: 1, action, payload });
+
+  const result = await ctx.shell.execute({
+    command: python,
+    args: [BRIDGE_SCRIPT],
+    stdin,
+    workdir: resolve(dirname(BRIDGE_SCRIPT), "..", "..", ".."),
+    timeoutMs: DEFAULTS.bridgeTimeoutMs,
+    signal,
+    maxStdoutBytes: DEFAULTS.maxParseBytes + 65536,
+  });
+
+  if (result.timedOut) {
+    return { ok: false, code: "TIMEOUT", message: "Bridge timed out.", hint: "Try again or increase timeout." };
+  }
+  if (result.exitCode !== 0) {
+    return { ok: false, code: "INTERNAL_ERROR",
+      message: `Python bridge exited with code ${result.exitCode}.`,
+      hint: "Check that Python and AutoREST dependencies are installed." };
+  }
   try {
-    const which = platform() === "win32" ? "where" : "which";
-    const pathOut = execSync(`${which} ${locatorExe} 2>&1`, { encoding: "utf8", timeout: 5000 }).trim();
-    if (pathOut && !pathOut.startsWith("INFO:") && !pathOut.includes("not found")) {
-      const paths = pathOut.split(/\r?\n/).filter(p => p && existsSync(p.trim()));
-      for (const p of paths) {
-        if (!results.some(r => r.path === p.trim())) {
-          try {
-            const ver = execSync(`"${p.trim()}" --version 2>&1 || echo ""`, { encoding: "utf8", timeout: 5000 }).trim();
-            results.push({ path: p.trim(), version: ver || "unknown", source: "path" });
-          } catch (_) {
-            results.push({ path: p.trim(), version: "detected (version unknown)", source: "path" });
-          }
-        }
-      }
-    }
-  } catch (_) { /* not on PATH */ }
+    return JSON.parse(result.stdout || "{}");
+  } catch (_) {
+    return { ok: false, code: "BRIDGE_PROTOCOL_ERROR",
+      message: "Bridge returned invalid JSON.", hint: "This may indicate a version mismatch." };
+  }
+}
 
-  // 3. Check current conda environment
-  try {
-    const condaPrefix = process.env.CONDA_PREFIX;
-    if (condaPrefix) {
-      for (const sub of ["bin", "Library/bin"]) {
-        const c = join(condaPrefix, sub, locatorExe);
-        if (existsSync(c) && statSync(c).isFile() && !results.some(r => r.path === c)) {
-          try {
-            const ver = execSync(`"${c}" --version 2>&1 || echo ""`, { encoding: "utf8", timeout: 5000 }).trim();
-            results.push({ path: c, version: ver || "unknown", source: "active_conda_env" });
-          } catch (_) {
-            results.push({ path: c, version: "detected (version unknown)", source: "active_conda_env" });
-          }
-        }
-      }
-    }
-  } catch (_) { /* no CONDA_PREFIX */ }
+// ══════════════════════════════════════════════════════════════════
+// Tool: autorest_detect_rest
+// ══════════════════════════════════════════════════════════════════
+async function toolDetectRest(args, execCtx) {
+  const resp = await invokeBridge(execCtx.ctx, "detect", {}, execCtx.signal);
+  return renderDetect(resp);
+}
 
-  const best = results.length > 0 ? results[0] : null;
+function renderDetect(resp) {
+  const d = resp.data || {};
+  const found = d.rest_found;
+  if (resp.ok && found) {
+    return {
+      ok: true,
+      rest_available: true,
+      rest_path: d.rest_executable,
+      rest_version: d.rest_version,
+      rest_source: d.rest_source,
+      conda_env: d.conda_env,
+      python_version: d.python_version,
+      bridge_protocol: d.bridge_protocol_version,
+      capabilities: d.capabilities,
+      warnings: d.warnings,
+      summary: `REST found at ${d.rest_executable} (${d.rest_source || 'unknown'}). Python ${d.python_version}. AutoREST bridge v${d.bridge_protocol_version}.`,
+      next_action: d.next_action,
+    };
+  }
   return {
-    found: results.length > 0,
-    count: results.length,
-    best_path: best?.path ?? null,
-    best_version: best?.version ?? null,
-    best_source: best?.source ?? null,
-    all: results,
-    recommendation: best
-      ? `REST found at: ${best.path}\nSource: ${best.source}\nUse: conda activate ${best.env || 'rest'} && rest -i input.in > output.out`
-      : "REST not found. Install via conda: conda create -n rest -c restgroup rest\nThen: conda activate rest",
+    ok: true,
+    rest_available: false,
+    python_version: d.python_version,
+    bridge_protocol: d.bridge_protocol_version,
+    capabilities: d.capabilities || [],
+    warnings: d.warnings || [],
+    summary: "REST not detected. AutoREST can still generate .in input files. Install REST via: conda create -n rest -c restgroup rest",
+    next_action: d.next_action || "Install REST with conda.",
   };
 }
 
-// ============================================================================
-// Tool 2: autorest_generate_input — generate a REST .in file
-// ============================================================================
-async function toolGenerateInput(args, _exec) {
-  const { system_name, geometry, geometry_unit, functional, basis, charge, spin,
-          job_type, empirical_dispersion, num_threads, auxbas_path,
-          bse_spin, n_roots } = args;
-
-  const disp = (empirical_dispersion && !["XYG3","XYG7","XYGJOS","xDH-PBE0","R-xDH7","scsRPA","RPA@PBE","RPA@B3LYP"].includes(functional))
-    ? `empirical_dispersion = "${empirical_dispersion}"` : "";
-
-  const spinPol = spin === undefined || spin === 1 ? "false" : "true";
-  const threads = num_threads || 4;
-  const job = job_type || "energy";
-  const aux = auxbas_path ? `auxbas_path = "${auxbas_path}"` : "";
-
-  let card = `[ctrl]\nnum_threads = ${threads}\nprint_level = 1\njob_type = "${job}"\nxc = "${functional}"\n`;
-  if (disp) card += `${disp}\n`;
-  card += `basis_path = "${basis}"\n`;
-  if (aux) card += `${aux}\n`;
-  card += `eri_type = "ri-v"\ncharge = ${charge ?? 0}\nspin = ${spin ?? 1}\nspin_polarization = ${spinPol}\n`;
-
-  if (job_type === "opt") {
-    card += `opt_engine = "geometric-pyo3"\n`;
-  }
-
-  if (bse_spin) {
-    card += `\n[quasiparticle_methods]\ngw_or_bse = "bse"\ngw_scheme = "extrapolated"\n`;
-    card += `use_low_rank_contour = true\nbse_spin = "${bse_spin}"\nbse_tda = true\n`;
-    card += `bse_davidson_solver = true\ndavidson_target_excitations = ${n_roots || 5}\n`;
-    card += `davidson_maximum_subspace_size = 50\ndavidson_restart_dimensions = 10\n`;
-  }
-
-  card += `\n[geom]\nname = "${system_name || "MOLECULE"}"\nunit = "${geometry_unit || "angstrom"}"\nposition = """\n`;
-  for (const line of (geometry || "").trim().split("\n")) {
-    card += line.trim() + "\n";
-  }
-  card += '"""\n';
-
-  return { card, filename: `${(system_name || "molecule").replace(/\s+/g, "_")}_${job}.in` };
+// ══════════════════════════════════════════════════════════════════
+// Tool: autorest_generate_input
+// ══════════════════════════════════════════════════════════════════
+async function toolGenerateInput(args, execCtx) {
+  const resp = await invokeBridge(execCtx.ctx, "generate_input", args, execCtx.signal);
+  if (!resp.ok) return resp;
+  const d = resp.data || {};
+  return {
+    ok: true,
+    toml: d.toml,
+    suggested_filename: d.suggested_filename,
+    task_summary: d.task_summary,
+    warnings: d.warnings || [],
+    summary: `Input card generated: ${d.suggested_filename} (${d.task_summary?.functional}/${d.task_summary?.basis}, ${d.task_summary?.job_type})`,
+    hint: "Save this card as a .in file, then run: conda activate rest && rest -i filename.in > filename.out",
+  };
 }
 
-// ============================================================================
-// Tool 3: autorest_parse_output — parse a REST output file
-// ============================================================================
-async function toolParseOutput(args, _exec) {
-  const { output_path } = args;
-  if (!output_path) return { error: "output_path is required" };
+// ══════════════════════════════════════════════════════════════════
+// Tool: autorest_parse_output
+// ══════════════════════════════════════════════════════════════════
+function resolveWorkspacePath(rawPath, execCtx) {
+  const cwd = execCtx.ctx?.cwd || process.cwd();
+  const resolved = resolve(cwd, rawPath);
+  // containment: reject ../
+  if (!resolved.startsWith(cwd + sep) && resolved !== cwd) {
+    throw Object.assign(new Error("Path is outside workspace"), { code: "PATH_OUTSIDE_WORKSPACE" });
+  }
+  return resolved;
+}
 
+async function toolParseOutput(args, execCtx) {
+  const rawPath = args.output_path;
+  if (!rawPath) return { ok: false, code: "INVALID_ARGUMENT", message: "output_path is required." };
+
+  let resolvedPath;
+  try {
+    resolvedPath = resolveWorkspacePath(rawPath, execCtx);
+  } catch (e) {
+    return { ok: false, code: e.code || "PATH_OUTSIDE_WORKSPACE", message: e.message };
+  }
+
+  // Read file via DSH filesystem seam
   let text;
   try {
-    const raw = await import("node:fs/promises").then(fs => fs.readFile(output_path));
-    // Detect BOM
-    if (raw[0] === 0xFF && raw[1] === 0xFE) text = raw.toString("utf16le");
-    else if (raw[0] === 0xFE && raw[1] === 0xFF) text = raw.toString("utf16be");
-    else text = raw.toString("utf8");
+    const raw = await execCtx.ctx.fs?.readFile?.(resolvedPath);
+    if (!raw) {
+      // fallback: direct read (sandboxed)
+      text = readFileSync(resolvedPath, { encoding: "utf8" });
+    } else {
+      // detect BOM for UTF-16
+      if (raw[0] === 0xFF && raw[1] === 0xFE) text = Buffer.from(raw).toString("utf16le");
+      else if (raw[0] === 0xFE && raw[1] === 0xFF) text = Buffer.from(raw).toString("utf16be");
+      else text = Buffer.from(raw).toString("utf8");
+    }
   } catch (e) {
-    return { error: `Cannot read file: ${e.message}` };
+    return { ok: false, code: "FILE_NOT_FOUND", message: `Cannot read ${rawPath}` };
   }
 
-  const result = { scf_converged: false, scf_energy: null, scf_cycles: 0,
-    mission_accomplished: false, total_time_s: null,
-    gw_finished: false, qp_gap_ev: null, bse_spin: null, states: [] };
-
-  // SCF convergence
-  const scfMatch = text.match(/SCF\s+is\s+converged\s+after\s+(\d+)\s+iterations/i);
-  if (scfMatch) { result.scf_converged = true; result.scf_cycles = parseInt(scfMatch[1]); }
-
-  // SCF energy (use definitive summary line, not initial guess)
-  const scfFinal = text.match(/The\s+SCF\s+energy\s*:\s*([+-]?\d+\.\d+)\s*Ha/i);
-  if (scfFinal) result.scf_energy = parseFloat(scfFinal[1]);
-  else {
-    const energyLines = [...text.matchAll(/Energy:\s+([+-]?\d+\.\d+)\s+Ha/gi)];
-    if (energyLines.length > 0) result.scf_energy = parseFloat(energyLines[energyLines.length - 1][1]);
+  if (text.length > DEFAULTS.maxParseBytes) {
+    return { ok: false, code: "FILE_TOO_LARGE", message: `File exceeds ${DEFAULTS.maxParseBytes} bytes.` };
   }
 
-  // Mission
-  result.mission_accomplished = /Mission\s+accomplished/i.test(text);
+  const resp = await invokeBridge(execCtx.ctx, "parse_output", { text }, execCtx.signal);
+  if (!resp.ok) return resp;
 
-  // GW
-  result.gw_finished = /One\s+round\s+of\s+GW|Quasiparticle\s+Energies\s+from\s+GW/i.test(text);
-
-  // QP gap
-  const qpLines = [...text.matchAll(/\(calculated\)\s*QP\s+Energy\s+of\s+Orbital\s+#(\d+):\s*([+-]?\d+\.\d+)/gi)];
-  if (qpLines.length > 0) {
-    const fermiMatch = text.match(/-{3,}\s*Fermi\s+Surface\s*-{3,}/i);
-    if (fermiMatch) {
-      const sepLine = text.slice(0, fermiMatch.index).split("\n").length;
-      const occ = qpLines.filter(m => text.slice(0, text.indexOf(m[0])).split("\n").length < sepLine);
-      const virt = qpLines.filter(m => text.slice(0, text.indexOf(m[0])).split("\n").length > sepLine);
-      if (occ.length > 0 && virt.length > 0) {
-        const homoE = Math.max(...occ.map(m => parseFloat(m[2])));
-        const lumoE = Math.min(...virt.map(m => parseFloat(m[2])));
-        result.qp_gap_ev = (lumoE - homoE) * 27.2113845;
-      }
-    }
-  }
-
-  // BSE spin
-  const bseMatch = text.match(/BSE\s+Type\s*:\s*(singlet|triplet)/i);
-  if (bseMatch) result.bse_spin = bseMatch[1].toLowerCase();
-
-  // BSE states
-  const windowMatch = text.match(/(\d+)\s+excitations?\s+within\s+the\s+window/i);
-  if (windowMatch) {
-    const body = text.slice(text.indexOf(windowMatch[0]) + windowMatch[0].length);
-    const states = [];
-    const stateRegex = /#(\d+)\s+Excitation\s+energy\s*=\s*([+-]?\d+(?:\.\d+)?)/gi;
-    const oscRegex = /Oscillator\s+Strength\s*:\s*([+-]?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)/gi;
-    let sm;
-    while ((sm = stateRegex.exec(body)) !== null) {
-      const eHa = parseFloat(sm[2]);
-      states.push({ index: parseInt(sm[1]), energy_ha: eHa, energy_ev: eHa * 27.2113845,
-        wavelength_nm: eHa > 0 ? 1239.84 / (eHa * 27.2113845) : 0, oscillator_strength: 0 });
-    }
-    let om; let si = 0;
-    while ((om = oscRegex.exec(body)) !== null && si < states.length) {
-      states[si++].oscillator_strength = parseFloat(om[1]);
-    }
-    result.states = states;
-  }
-
-  // Timing
-  const timeMatch = text.match(/Overall\s*\|:\s*([\d.]+)\s*s\s+for\s+the\s+whole\s+job/i);
-  if (timeMatch) result.total_time_s = parseFloat(timeMatch[1]);
-
-  return result;
+  const d = resp.data || {};
+  return {
+    ok: true,
+    scf_energy: d.scf_energy,
+    scf_converged: d.scf_converged,
+    scf_cycles: d.scf_cycles,
+    total_energy: d.total_energy,
+    dipole: d.dipole,
+    frequencies: d.frequencies,
+    imaginary_frequencies: d.imaginary_frequencies,
+    zpe: d.zpe,
+    forces: d.forces,
+    optimized_geometry: d.optimized_geometry,
+    optimization_converged: d.optimization_converged,
+    mission_accomplished: d.mission_accomplished,
+    wall_time_s: d.wall_time_s,
+    bse_states: d.bse_states,
+    warnings: d.warnings,
+    qa_checks: d.qa_checks,
+    summary: `SCF ${d.scf_converged ? 'converged' : 'NOT converged'}, energy=${d.scf_energy ?? 'N/A'} Ha. ${d.mission_accomplished ? 'Mission accomplished.' : ''}`,
+  };
 }
 
-// ============================================================================
-// System prompt guidance
-// ============================================================================
+// ══════════════════════════════════════════════════════════════════
+// Adaptive system prompt
+// ══════════════════════════════════════════════════════════════════
 const AUTOREST_PROMPT = [
-  "AutoREST is a quantum chemistry assistant that generates REST electronic-structure input cards as .in files (TOML format with [ctrl] and [geom] blocks).",
-  "Before suggesting any calculation, ALWAYS call the autorest_detect_rest tool first to check whether REST is installed.",
-  "If REST is found: tell the user the path and version, and offer to run calculations (conda activate <env> && rest -i file.in > file.out).",
-  "If REST is NOT found: generate .in files only. Tell the user: 'REST not detected. Install with: conda create -n rest -c restgroup rest'. Also tell them they can run: rest -i filename.in > filename.out once installed.",
-  "Use the bundled 'autorest' Skill for the interactive Q&A workflow.",
-  "Use autorest_generate_input tool to generate valid REST .in cards from confirmed parameters.",
-  "Use autorest_parse_output tool to analyze REST output files the user provides.",
-  "REST input files use .in extension with TOML content inside, not JSON.",
-  "empirical_dispersion is a separate keyword - never appended to xc.",
-  "For triplet BSE: keep spin=1 (closed-shell reference) and set bse_spin='triplet'. Never change spin to 3.",
+  "AutoREST is a quantum chemistry plugin. It registers three tools:",
+  "  autorest_detect_rest — checks whether REST is installed",
+  "  autorest_generate_input — generates .in input cards",
+  "  autorest_parse_output — parses REST output files",
+  "When a user asks to calculate a molecule, first call autorest_detect_rest.",
+  "If the user already specified method/basis/charge/spin, do NOT ask again — go directly to generation.",
+  "If information is missing, ask ONLY the missing pieces, using ask_user_question to batch independent questions.",
+  "REST .in files use TOML format (NOT JSON). charge and spin go in [ctrl], not [geom].",
+  "empirical_dispersion is a separate keyword. Double-hybrid/RPA must NOT have dispersion.",
+  "Triplet BSE: keep spin=1 and set bse_spin='triplet'. Never change spin to 3.",
+  "Detailed knowledge lives in the bundled 'autorest' Skill — load it with skill('autorest') when needed.",
 ].join(" ");
 
-// ============================================================================
-// Skill registration (unchanged from v2)
-// ============================================================================
+// ══════════════════════════════════════════════════════════════════
+// Skill registration
+// ══════════════════════════════════════════════════════════════════
 function registerSkillProvider(service, path) {
   const raw = readFileSync(path, "utf8");
   const match = /^---\r?\nname: ([^\r\n]+)\r?\ndescription: ([^\r\n]+)\r?\n---\r?\n([\s\S]*)$/.exec(raw);
@@ -272,21 +242,21 @@ function registerSkillProvider(service, path) {
   }));
 }
 
-// ============================================================================
-// Cordis plugin entry point
-// ============================================================================
+// ══════════════════════════════════════════════════════════════════
+// Cordis entry point
+// ══════════════════════════════════════════════════════════════════
 export function apply(ctx, _config) {
-  // 1. Register tools
+  // 1. Register three tools
   ctx.effect(() => {
     const d1 = ctx.tools.register({
       name: "autorest_detect_rest",
-      description: "Detect REST electronic-structure program on this computer. Checks conda environments, system PATH, and active conda env. Returns whether REST is found, its path, version, and a usage recommendation. Call this FIRST before suggesting any calculation.",
+      description: "Detect REST electronic-structure program on this computer. Checks conda environments and system PATH. Returns whether REST is found, its path, version, and a usage recommendation. Always call this first when a user asks about REST calculations.",
       parameters: { type: "object", properties: {}, required: [] },
       execute: toolDetectRest,
     });
     const d2 = ctx.tools.register({
       name: "autorest_generate_input",
-      description: "Generate a valid REST .in input file from confirmed parameters. Requires system_name, geometry (XYZ format), geometry_unit, functional, basis, charge, spin. Optional: job_type (default energy), empirical_dispersion, num_threads, auxbas_path, bse_spin, n_roots. Returns the TOML card text and suggested filename.",
+      description: "Generate a valid REST .in input file from confirmed parameters. Requires system_name, geometry (XYZ), geometry_unit (angstrom/bohr), functional, basis, charge, spin. Optional: job_type (energy/opt/force/frequency), empirical_dispersion (d3/d3bj/d4), num_threads, auxbas_path, bse_spin (singlet/triplet), n_roots.",
       parameters: {
         type: "object",
         properties: {
@@ -297,7 +267,7 @@ export function apply(ctx, _config) {
           basis: { type: "string", description: "Basis set e.g. def2-SVP, cc-pVDZ" },
           charge: { type: "number", description: "Net molecular charge" },
           spin: { type: "number", description: "Spin multiplicity 2S+1" },
-          job_type: { type: "string", description: "energy, opt, or force" },
+          job_type: { type: "string", description: "energy, opt, force, or frequency" },
           empirical_dispersion: { type: "string", description: "d3, d3bj, or d4" },
           num_threads: { type: "number", description: "CPU thread count" },
           auxbas_path: { type: "string", description: "Auxiliary basis set" },
@@ -310,10 +280,10 @@ export function apply(ctx, _config) {
     });
     const d3 = ctx.tools.register({
       name: "autorest_parse_output",
-      description: "Parse a REST calculation output file. Extracts SCF energy/convergence, GW quasiparticle gap, BSE excitation energies/oscillator strengths, Davidson diagnostics, and timing. Handles UTF-8 and UTF-16 encodings.",
+      description: "Parse a REST calculation output file. Extracts SCF energy/convergence, GW quasiparticle gap, BSE excitation energies/oscillator strengths, and scientific QA checks. Handles UTF-8 and UTF-16 encodings.",
       parameters: {
         type: "object",
-        properties: { output_path: { type: "string", description: "Path to the REST .out file" } },
+        properties: { output_path: { type: "string", description: "Workspace-relative path to the REST .out file" } },
         required: ["output_path"],
       },
       execute: toolParseOutput,
@@ -321,14 +291,14 @@ export function apply(ctx, _config) {
     return () => { d1(); d2(); d3(); };
   });
 
-  // 2. Register system prompt
+  // 2. System prompt
   ctx.effect(() =>
     ctx.systemPrompt.section({ name: "autorest:guidance", order: 90, text: AUTOREST_PROMPT })
   );
 
-  // 3. Register the bundled skill
+  // 3. Bundled Skill (self-contained within plugin)
   ctx.effect(() => {
-    const skillFile = fileURLToPath(new URL("../../assets/skills/autorest/SKILL.md", import.meta.url));
+    const skillFile = fileURLToPath(new URL("../resources/skill/SKILL.md", import.meta.url));
     return ctx.inject(["skills"], (child) => {
       child.effect(() => registerSkillProvider(child.skills, skillFile));
     });

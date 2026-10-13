@@ -2,55 +2,36 @@
 requires = ["setuptools>=61", "wheel"]
 build-backend = "setuptools.build_meta"
 
-[tool.setuptools.packages.find]
-where = ["."]
-
 [project]
 name = "autorest"
-version = "1.0.0"
-description = "AI-Driven REST Electronic Structure Automation — 从输入卡生成到科学验证的量子化学全自动工具"
+version = "4.0.0"
+description = "AutoREST — AI-Driven REST Electronic Structure Automation"
 readme = "README.md"
 license = {text = "MIT"}
 authors = [{name = "Zhehan Tong"}]
-keywords = [
-    "quantum-chemistry",
-    "electronic-structure",
-    "dft",
-    "gw-bse",
-    "rest",
-    "computational-chemistry",
-    "ai-for-science",
-]
+requires-python = ">=3.9"
+dependencies = ["numpy>=1.20"]
+keywords = ["quantum-chemistry", "electronic-structure", "dft", "gw-bse", "rest"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Science/Research",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.9",
-    "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
-    "Programming Language :: Python :: 3.12",
     "Topic :: Scientific/Engineering :: Chemistry",
-    "Topic :: Scientific/Engineering :: Physics",
-]
-requires-python = ">=3.9"
-dependencies = [
-    "numpy>=1.20",
 ]
 
 [project.urls]
-Homepage = "https://github.com/your-org/AutoREST"
-Repository = "https://github.com/your-org/AutoREST"
-Issues = "https://github.com/your-org/AutoREST/issues"
+Homepage = "https://github.com/masterTHou/AutoREST"
+Repository = "https://github.com/masterTHou/AutoREST"
+Issues = "https://github.com/masterTHou/AutoREST/issues"
 
 [project.scripts]
 autorest = "autorest.cli:main"
 
 [project.optional-dependencies]
-dev = [
-    "pytest>=7.0",
-]
+dev = ["pytest>=7.0"]
 
-[tool.setuptools]
-packages = ["autorest"]
-package-dir = {"" = "."}
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["autorest", "autorest.*"]

@@ -3,11 +3,11 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![REST](https://img.shields.io/badge/REST-v2026-green)](https://gitee.com/restgroup)
 [![DSH Plugin](https://img.shields.io/badge/DSH-Plugin-blue)](https://www.deepseek.com/)
-[![Version](https://img.shields.io/badge/version-3.0.0-brightgreen)](https://github.com/masterTHou/AutoREST/releases)
+[![Version](https://img.shields.io/badge/version-4.0.0-brightgreen)](https://github.com/masterTHou/AutoREST/releases)
 
-> **在 DeepSeek Harness 里用聊天完成量子化学计算。**
+> **在 DeepSeek Harness 里用聊天完成量子化学计算。真正的 DSH Cordis 插件，带 Tool 注册和 Python JSON Bridge。**
 >
-> 你说「帮我算一个水分子的单点能」，它会弹出选择题面板，引导你一步步选出合适的计算方法和参数，最后自动生成 REST 可以运行的 `.in` 输入文件（TOML 格式，包含 `[ctrl]` 和 `[geom]` 区块）。不需要你懂 DFT 泛函、基组、色散校正——AutoREST 会帮你选。
+> 你说「帮我算一个水分子的单点能」，它会自动检测 REST 环境，然后自适应地引导你完成计算——新手会得到一步步的推荐引导，专家可以直接一句话搞定。输出标准的 `.in` 输入文件（TOML 格式），运行命令：`conda activate rest && rest -i 文件名.in > 文件名.out`。
 
 ---
 
@@ -39,9 +39,9 @@
 
 ---
 
-## 🆕 最新更新 (v3.0.0) — 真正的 DSH 插件
+## 🆕 v4.0.0 — 真正的 DSH Cordis 插件 + Python JSON Bridge
 
-### 从 Skill 到 Plugin 的升级
+### 架构升级
 
 v3.0.0 将 AutoREST 从一个**纯 Markdown Skill** 升级为**真正的 DSH Cordis 插件**。安装后，DSH 自动注册 3 个可调用工具：
 
@@ -111,41 +111,35 @@ AutoREST 知道什么时候推荐什么方法：
 
 ## 工作原理
 
-### 它是什么
+### 架构
 
-AutoREST 是一个 **DSH Skill**——一份 Markdown 格式的指令文件，被 DeepSeek Harness 的 Skill 子系统自动发现和加载。它不是 Cordis 插件，不需要 TypeScript 编译，不需要 Python 后端服务。
+AutoREST v4 是一个 **DSH Cordis 插件**（不是纯 Skill）。安装后，DSH 通过 `cordis.patch.yml` 加载插件，插件注册 3 个可调用 Tool，Tool 通过 DSH Shell seam 安全调用 Python JSON Bridge。
 
 ```
 你说 "帮我算水分子"
        ↓
-DSH 的 Skill 子系统扫描项目目录
+DSH Plugin 加载 (cordis.patch.yml → lib/index.js)
        ↓
-发现 .dsh/skills/autorest/SKILL.md (rank 100，最高优先级)
+注册 3 个 Tool + System Prompt + Bundled Skill
        ↓
-LLM 读取 SKILL.md 里的指令：弹面板 → 问参数 → 推荐方法 → 生成 TOML
+LLM 调用 autorest_detect_rest → Python bridge → 检测 REST 环境
        ↓
-输出 REST 输入卡 (.in 文件)
+LLM 自适应交互（新手引导 / 专家直达）
+       ↓
+LLM 调用 autorest_generate_input → Python bridge → InputGenerator
+       ↓
+输出 .in 文件（REST TOML 格式）
 ```
-
-### DSH 如何发现它
-
-DSH 启动时按优先级扫描以下目录：
-
-| 优先级 | 路径 | 说明 |
-|--------|------|------|
-| 100 | `<项目>/.dsh/skills/<name>/SKILL.md` | 项目专属，最高优先 |
-| 200 | `<项目>/.agents/skills/<name>/SKILL.md` | 项目备用 |
-| 400 | `~/.dsh/skills/<name>/SKILL.md` | 全局安装，所有项目可用 |
-
-你把 `.dsh/skills/autorest/` 放到项目根目录下，重启 DSH，Skill 就生效了。不需要 `package.json`、不需要 Cordis patch、不需要任何编译步骤。
 
 ### 技术栈
 
 | 组件 | 技术 |
 |------|------|
-| Skill 指令 | Markdown (`.dsh/skills/autorest/SKILL.md`) |
+| DSH 插件 | TypeScript Cordis plugin (`package.json` + `cordis.patch.yml`) |
+| Tool 注册 | `ctx.tools.register(defineTool(...))` |
+| Python Bridge | stdin JSON → stdout JSON（无状态，一次请求一进程） |
+| 科学计算核心 | Python 3.9+ (`InputGenerator`, `OutputParser`, `ScientificValidator`) |
 | 参考知识库 | Markdown + TXT (REST 手册、GW-BSE 指南、方法选择表) |
-| Python 工具脚本 | Python 3.9+ (`input_generator.py`, `output_parser.py`, `gwbse_parser.py` 等) |
 | 测试 | Python `unittest` + 真实 REST 输出 fixtures |
 
 ---

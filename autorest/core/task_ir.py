@@ -324,12 +324,12 @@ class CalculationTask:
     intent: TaskIntent
     """What kind of calculation this is."""
 
-    molecular_character: MolecularCharacter = MolecularCharacter.GENERIC
-    """Qualitative electronic structure classification."""
-
     # ── Input state ───────────────────────────────────────────────
     geometry: Geometry
     """Starting (or fixed) geometry."""
+
+    molecular_character: MolecularCharacter = MolecularCharacter.GENERIC
+    """Qualitative electronic structure classification."""
 
     charge: int = 0
     """Net molecular charge."""
