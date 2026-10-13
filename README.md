@@ -2,8 +2,8 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![REST](https://img.shields.io/badge/REST-v2026-green)](https://gitee.com/restgroup)
-[![DSH Skill](https://img.shields.io/badge/DSH-Skill-blue)](https://www.deepseek.com/)
-[![Version](https://img.shields.io/badge/version-2.2.1-brightgreen)](https://github.com/masterTHou/AutoREST/releases)
+[![DSH Plugin](https://img.shields.io/badge/DSH-Plugin-blue)](https://www.deepseek.com/)
+[![Version](https://img.shields.io/badge/version-3.0.0-brightgreen)](https://github.com/masterTHou/AutoREST/releases)
 
 > **在 DeepSeek Harness 里用聊天完成量子化学计算。**
 >
@@ -39,45 +39,46 @@
 
 ---
 
-## 🆕 最新更新 (v2.2.1)
+## 🆕 最新更新 (v3.0.0) — 真正的 DSH 插件
 
-### 三种工作模式，灵活适配不同场景
+### 从 Skill 到 Plugin 的升级
 
-| 模式 | 适合谁 | 怎么用 |
-|------|--------|--------|
-| **标准模式** | 新手 / 不熟悉计算方法的用户 | 一步一步选：任务类型 → 方法推荐 → 确认生成 |
-| **快捷模式** | 老手 / 已明确方法和基组 | 直接说「B3LYP/def2-SVP 算 BDE」，跳过推荐面板 |
-| **批量模式** | 需要一次算多个任务 | 导入 xlsx/CSV 文件，统一选方法和资源，一键批量生成 |
+v3.0.0 将 AutoREST 从一个**纯 Markdown Skill** 升级为**真正的 DSH Cordis 插件**。安装后，DSH 自动注册 3 个可调用工具：
 
-### 更智能的方法推荐
+| 工具 | 功能 |
+|------|------|
+| `autorest_detect_rest` | **自动扫描**你的电脑上的 REST 安装（conda env、系统 PATH、当前 conda 环境）。找到就告诉你路径和版本；找不到就只生成 .in 文件 |
+| `autorest_generate_input` | **确定性生成** REST .in 输入文件。接受结构、方法、基组等参数，输出严格符合 REST TOML 规范的卡片 |
+| `autorest_parse_output` | **解析** REST 输出文件。提取 SCF 能量/收敛状态、GW QP gap、BSE 激发能/振子强度 |
 
-不再一刀切推荐 B3LYP——根据你任务中的**关键词**动态匹配：
+### 安装后第一句话的效果
 
-- 说 **"高精度"** → 自动推荐 XYG3/def2-QZVPP
-- 说 **"过渡金属"** → 自动推荐 PBE0-D3BJ/def2-TZVP
-- 说 **"弱相互作用"** → 自动推荐 M06-2X + 色散校正
-- 说 **"BDE"** → 提醒需要分子+碎片两个单点能后相减
-- 共 **13 种关键词**覆盖常见计算场景
+```
+👤 "帮我算水分子"
 
-### REST 任务语法速查
+🤖 [自动调用 autorest_detect_rest]
+   "✅ REST 已检测到：D:\anaconda3\envs\rest\bin\rest.exe
+    (REST 2026.1.1, conda env rest)
+    生成 .in 文件后运行：
+    conda activate rest && rest -i water_energy.in > water_energy.out
+    现在你要算什么？"
+```
 
-内置了每种任务类型的 REST 配置语法 + 支持程度标注（✅ 完全支持 / ⚠️ 实验性），包括过渡态搜索、IRC、势能面扫描的已知限制。
+或者没有 REST 的情况：
 
-### SCF 收敛故障速查
+```
+👤 "帮我算水分子"
 
-遇到 SCF 不收敛？内置 6 种常见症状的**一键诊断**：能量振荡 → `ediis+diis`；近简并 → `level_shift`；收敛慢 → `smear`；过渡金属 → 组合策略。
+🤖 [自动调用 autorest_detect_rest]
+   "⚠️ REST 未检测到。我会只生成 .in 输入文件。
+    安装命令：conda create -n rest -c restgroup rest
+    安装后运行：conda activate rest && rest -i 文件名.in > 文件名.out
+    现在你要算什么？"
+```
 
-### 使用方法
+### 保留 v2.x 全部功能
 
-在 DSH 聊天框里说：
-
-> 帮我算一个水分子的单点能
-
-AutoREST 会弹出一个工作模式选择面板，选「标准模式」进入逐步引导；或者直接说「B3LYP/def2-SVP 算水分子能量」进入快捷模式。
-
-如果你有多个任务（比如 xlsx 表格里列了 9 个体系），选「批量模式」，上传文件后统一配置即可。
-
-> 💡 **REST 运行命令**：生成 `.in` 文件后执行 `conda activate rest && rest -i 文件名.in > 文件名.out`
+标准/快捷/批量三种工作模式、13 种关键词动态方法推荐、REST 任务语法速查表、SCF 收敛故障速查——全部保留。
 
 ---
 

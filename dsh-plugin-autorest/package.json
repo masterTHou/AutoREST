@@ -1,9 +1,9 @@
 ﻿{
     "name":  "@autorest/dsh-plugin-autorest",
-    "version":  "2.2.1",
+    "version":  "3.0.0",
     "private":  true,
     "type":  "module",
-    "description":  "Cordis plugin bundling the AutoREST quantum chemistry Skill into DeepSeek Harness. Interactive REST TOML input card generation through selection panels. No backend required.",
+    "description":  "AutoREST v3: Cordis plugin with real Tool registration (detect REST, generate .in files, parse output) + bundled Skill + system prompt guidance. Install via DSH Plugin Manager.",
     "main":  "./lib/index.js",
     "engines":  {
                     "node":  "\u003e=20"
