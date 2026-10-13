@@ -146,58 +146,21 @@ LLM 调用 autorest_generate_input → Python bridge → InputGenerator
 
 ## 安装
 
-### 方式一：下载 Release 压缩包（最简单）
+### 方式一：DSH 插件安装（推荐）
 
-1. 从 [Releases](https://github.com/masterTHou/AutoREST/releases) 下载 `autorest-dsh-2.2.1.tgz`
-2. 解压到你的 DSH 项目根目录——解压后应该出现 `你的项目/.dsh/skills/autorest/SKILL.md`
-3. **完全退出 DSH 再重新打开**
+1. 从 [Releases](https://github.com/masterTHou/AutoREST/releases) 下载 `autorest-dsh-4.0.0.tgz`
+2. DSH 桌面版 → 插件 → 添加插件 → 填写 `.tgz` 绝对路径，**无需解压**
+3. 启用 AutoREST
 4. 在聊天里说：「帮我算一个水分子的单点能」
 
-### 方式二：克隆后运行安装脚本
-
-```powershell
-# Windows
-git clone https://github.com/masterTHou/AutoREST.git
-cd AutoREST
-.\install.ps1   # 安装到当前目录的项目中
-
-# 或指定目标目录
-.\install.ps1 -TargetDir "D:\MyDSHProject"
-```
+### 方式二：pip 命令行安装（不依赖 DSH）
 
 ```bash
-# macOS / Linux
 git clone https://github.com/masterTHou/AutoREST.git
 cd AutoREST
-bash install.sh          # 安装到当前目录
-bash install.sh /path/to/project   # 安装到指定项目
+pip install -e .
+autorest --help
 ```
-
-### 方式三：全局安装（所有 DSH 项目都能用）
-
-```powershell
-# Windows PowerShell
-git clone https://github.com/masterTHou/AutoREST.git
-cd AutoREST
-New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\.dsh\skills\autorest"
-Copy-Item ".dsh\skills\autorest\*" "$env:USERPROFILE\.dsh\skills\autorest\" -Recurse -Force
-```
-
-```bash
-# macOS / Linux
-git clone https://github.com/masterTHou/AutoREST.git
-cd AutoREST
-mkdir -p ~/.dsh/skills/autorest
-cp -r .dsh/skills/autorest/* ~/.dsh/skills/autorest/
-```
-
-### 验证安装
-
-重启 DSH 后，在聊天框输入：
-
-> 帮我算一个水分子的单点能
-
-如果弹出了选择面板（而不是直接给你一段 TOML 或 JSON），说明安装成功。
 
 ---
 
@@ -320,37 +283,31 @@ AutoREST 会：
 
 ```
 AutoREST/
-├── .dsh/skills/autorest/        # ⭐ DSH Skill 核心——这是用户要的东西
-│   ├── SKILL.md                 #    交互式面板指令（YAML frontmatter + Markdown）
-│   ├── references/              #    知识库
-│   │   ├── rest_readme.txt      #      REST 完整关键词手册 (1336 行)
-│   │   ├── rest_guide.md        #      方法选择表 + 模板 + 工作流
-│   │   └── gwbse_guide.md       #      GW-BSE 12 条铁律 + 6 分子回归数据
-│   └── scripts/                 #    Python 工具脚本
-│       ├── input_generator.py   #      REST TOML 输入卡生成引擎
-│       ├── output_parser.py     #      REST 输出解析
-│       ├── gwbse_parser.py      #      GW-BSE 专用解析器
-│       ├── scientific_validator.py #   10 项科学验证检查
-│       ├── diagnose.py          #      失败诊断 + 约束自动恢复
-│       ├── provenance.py        #      溯源记录
-│       └── ...
-├── autorest/                    # Python CLI 库（`pip install -e .`）
-│   ├── cli.py                   #    命令行入口
-│   └── core/                    #    task_ir, pipeline, verify, report...
-├── examples/                    # 入门示例
-│   ├── water_energy.py          #    H₂O 单点能
-│   ├── water_gwbse.py           #    H₂O GW-BSE
-│   └── acetone_workflow.py      #    丙酮多步骤工作流
-├── tests/                       # 测试套件
-│   ├── test_parser.py           #    解析器回归测试
-│   ├── test_integration.py      #    集成测试
-│   └── fixtures/                #    真实 REST 输出样本
-├── install.ps1                  # Windows 安装脚本
-├── install.sh                   # macOS/Linux 安装脚本
-├── release.ps1                  # Release 打包脚本
-├── pyproject.toml               # pip install 配置
-├── AGENTS.md                    # 开发者指南
-└── README.md                    # ← 本文件
+├── dsh-plugin-autorest/              # ⭐ DSH Cordis 插件——这是用户安装的东西
+│   ├── package.json                  #    npm 包元数据 (dsh.bundle)
+│   ├── cordis.patch.yml              #    Cordis 注册补丁
+│   ├── lib/index.js                  #    插件入口（Tool 注册 + Bridge + Skill）
+│   ├── resources/skill/              #    捆绑的 Skill 文件（self-contained）
+│   │   ├── SKILL.md                  #    自适应 UX 指令
+│   │   ├── references/               #    REST 手册 + GW-BSE 指南
+│   │   └── scripts/                  #    Python 工具脚本
+│   └── vendor/python/autorest/       #    捆绑的 Python 源码（self-contained）
+│       ├── dsh_bridge.py             #    JSON bridge 入口
+│       ├── input_generator.py        #    输入卡生成引擎
+│       ├── output_parser.py          #    输出解析
+│       ├── scientific_validator.py   #    科学验证
+│       ├── gwbse_parser.py           #    GW-BSE 专用解析器
+│       └── core/                     #    task_ir, diagnose, provenance, pipeline
+├── autorest/                         # Python CLI 库（`pip install -e .`）
+│   ├── dsh_bridge.py                 #    JSON bridge 入口
+│   ├── bridge/                       #    协议定义
+│   └── core/                         #    科学核心
+├── skills/autorest/                  # Skill 源码（打包时同步到 plugin）
+├── examples/                         # 入门示例
+├── tests/                            # 测试套件 + fixtures
+├── pyproject.toml                    # pip install 配置
+├── AGENTS.md                         # 开发者指南
+└── README.md                         # ← 本文件
 ```
 
 ### 代码统计
@@ -378,17 +335,11 @@ python -m unittest discover -s tests -v
 ### 打包 Release
 
 ```powershell
-.\release.ps1 -Version "2.2.1"
-# 生成 autorest-dsh-2.2.1.tgz
+# 在项目根目录执行：把 skill 和 Python 源码同步到插件目录，然后打 .tgz
+Copy-Item "skills\autorest\*" "dsh-plugin-autorest\resources\skill\" -Recurse -Force
+Copy-Item "autorest\*" "dsh-plugin-autorest\vendor\python\autorest\" -Recurse -Force
+tar -czf autorest-dsh-4.0.0.tgz -C dsh-plugin-autorest .
 ```
-
-### 修改 Skill 指令
-
-编辑 `.dsh/skills/autorest/SKILL.md`，重启 DSH 后生效。不需要编译。
-
-### 添加新的计算方法
-
-编辑 `.dsh/skills/autorest/references/rest_guide.md` 中的方法推荐表。
 
 ---
 
